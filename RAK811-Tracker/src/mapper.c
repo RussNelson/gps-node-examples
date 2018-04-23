@@ -35,11 +35,6 @@
 #define APP_TX_DUTYCYCLE_RND                        1000
 
 /*!
- * Default datarate
- */
-#define LORAWAN_DEFAULT_DATARATE                    DR_5
-
-/*!
  * LoRaWAN confirmed messages
  */
 #define LORAWAN_CONFIRMED_MSG_ON                    false
@@ -89,10 +84,13 @@
 #if defined( REGION_CN470 ) || defined( REGION_CN779 ) || defined( REGION_EU433 ) || defined( REGION_EU868 ) || defined( REGION_IN865 ) || defined( REGION_KR920 )
 
 #define LORAWAN_APP_DATA_SIZE                       16
+#define LORAWAN_DEFAULT_DATARATE                    DR_5
+
 
 #elif defined( REGION_AS923 ) || defined( REGION_AU915 ) || defined( REGION_US915 ) || defined( REGION_US915_HYBRID )
 
 #define LORAWAN_APP_DATA_SIZE                       11
+#define LORAWAN_DEFAULT_DATARATE                    DR_4
 
 #else
 
@@ -205,35 +203,9 @@ void dump_hex2str(uint8_t *buf, uint8_t len) {
 	printf("\r\n");
 }
 
-/*!
- * \brief   Prepares the payload of the frame
- */
-void test_gps(void) {
-	double latitude, longitude, hdopGps = 0;
-	int16_t altitudeGps = 0xFFFF;
-	uint8_t ret;
-	ret = GpsGetLatestGpsPositionDouble(&latitude, &longitude);
-	altitudeGps = GpsGetLatestGpsAltitude(); // in m
-	hdopGps = GpsGetLatestGpsHorizontalDilution();
-
-	//	printf("[Debug]: latitude: %f, longitude: %f , altitudeGps: %d \n", latitude, longitude, altitudeGps);	    	
-}
-
-void test_temp(void) {
-	int8_t tempr = 25;
-
-	LIS3DH_GetTempRaw(&tempr); //only tempr changed value
-	tempr = tempr + 20; // temprature should be calibration  in a right temp for every device
-	printf("[Debug]: tempr: %d Bat: %dmv\r\n", tempr,
-			BoardBatteryMeasureVolage());
-}
-
-uint8_t GPS_GETFAIL = FAIL;
-
 static void PrepareTxFrame(uint8_t port) {
 	double latitude, longitude, hdopGps = 0;
 	int16_t altitudeGps = 0xFFFF;
-	int8_t tempr = 25;
 	uint8_t ret;
 	uint16_t bat;
 
@@ -245,32 +217,33 @@ static void PrepareTxFrame(uint8_t port) {
 		altitudeGps = GpsGetLatestGpsAltitude(); // in m
 		hdopGps = GpsGetLatestGpsHorizontalDilution();
 		//printf("[Debug]: latitude: %f, longitude: %f , altitudeGps: %d \n", latitude, longitude, altitudeGps);
-		printf("GpsGetLatestGpsPositionDouble ret = %d\r\n", ret);
-		int32_t lat = latitude * 10000;
-		int32_t lon = longitude * 10000;
-		int16_t alt = altitudeGps * 100;
-		int8_t hdev = hdopGps * 10;
+		int32_t lat = ((latitude + 90) / 180.0) * 16777215;
+		int32_t lon = ((longitude + 180) / 360.0) * 16777215;
+		int16_t alt = altitudeGps;
+		int8_t hdev = hdopGps / 10;
 		
 		if (ret == SUCCESS) {
 
-			AppData[0] = lat;
+                        printf("Lat: %d Lon: %d, Alt: %d\r\n", (int)lat, (int)lon, alt);
+
+			AppData[0] = lat >> 16;
 			AppData[1] = lat >> 8;
-			AppData[2] = lat >> 16;
+			AppData[2] = lat;
 
-			AppData[3] = lon;
+			AppData[3] = lon >> 16;
 			AppData[4] = lon >> 8;
-			AppData[5] = lon >> 16;
+			AppData[5] = lon;
 
-			AppData[6] = alt;
-			AppData[7] = alt >> 8;
+			AppData[6] = alt >> 8;
+			AppData[7] = alt;
 
-			AppData[8] = hdev;
+			AppData[9] = hdev;
 
-			AppDataSize = 9;
+			AppDataSize = 10;
 
 		} else {
+                        printf("No GPS fix.\r\n");
 			AppDataSize = 0;
-			GPS_GETFAIL = SUCCESS;
 		}
 	}
 		break;
@@ -339,9 +312,10 @@ static void PrepareTxFrame(uint8_t port) {
  *
  * \retval  [0: frame could be send, 1: error]
  */
-static bool SendFrame(void) {
+static int SendFrame(void) {
 	McpsReq_t mcpsReq;
 	LoRaMacTxInfo_t txInfo;
+        int err;
 
 	if (LoRaMacQueryTxPossible(AppDataSize, &txInfo) != LORAMAC_STATUS_OK) {
 		// Send empty frame in order to flush MAC commands
@@ -366,10 +340,8 @@ static bool SendFrame(void) {
 		}
 	}
 
-	if (LoRaMacMcpsRequest(&mcpsReq) == LORAMAC_STATUS_OK) {
-		return false;
-	}
-	return true;
+	err = LoRaMacMcpsRequest(&mcpsReq);
+	return err; // LORAMAC_STATUS_OK is zero.
 }
 
 /*!
@@ -734,6 +706,7 @@ int main(void) {
 
 			TimerInit(&Led2Timer, OnLed2TimerEvent);
 			TimerSetValue(&Led2Timer, 50);
+			TimerStart(&Led2Timer);
 
 			mibReq.Type = MIB_ADR;
 			mibReq.Param.AdrEnable = LORAWAN_ADR_ON;
@@ -745,7 +718,7 @@ int main(void) {
 
 			DeviceState = DEVICE_STATE_JOIN;
 			break;
-		}
+                }
 		case DEVICE_STATE_JOIN: {
 #if( OVER_THE_AIR_ACTIVATION != 0 )
 			MlmeReq_t mlmeReq;
@@ -837,16 +810,15 @@ int main(void) {
 			DeviceState = DEVICE_STATE_SEND;
 #endif
 			break;
-		}
-		case DEVICE_STATE_SEND: {
+                }
+		case DEVICE_STATE_SEND:
 			if (NextTx == true) {
+                                int err;
 				PrepareTxFrame(AppPort);
 
-				if (GPS_GETFAIL == SUCCESS) {
-					GPS_GETFAIL = FAIL;
-				} else {
-					NextTx = SendFrame();
-				}
+                                err = SendFrame();
+                                NextTx = err == LORAMAC_STATUS_OK;
+                                printf("SendFrame: %d\r\n", err);
 				AppPort++;
 				if (AppPort >= 5) {
 					AppPort = 2;
@@ -862,24 +834,20 @@ int main(void) {
 			}
 			DeviceState = DEVICE_STATE_CYCLE;
 			break;
-		}
-		case DEVICE_STATE_CYCLE: {
+		case DEVICE_STATE_CYCLE:
 			DeviceState = DEVICE_STATE_SLEEP;
 
 			// Schedule next packet transmission
 			TimerSetValue(&TxNextPacketTimer, TxDutyCycleTime);
 			TimerStart(&TxNextPacketTimer);
 			break;
-		}
-		case DEVICE_STATE_SLEEP: {
+		case DEVICE_STATE_SLEEP:
 			// Wake up through events
 			TimerLowPowerHandler();
 			break;
-		}
-		default: {
+		default:
 			DeviceState = DEVICE_STATE_INIT;
 			break;
-		}
 		}
 		if (GpsGetPpsDetectedState() == true) {
 			// Switch LED 2 ON

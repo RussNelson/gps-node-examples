@@ -1,45 +1,47 @@
-function Decoder(b, port) {
+function Decoder(bytes, port) {
+    // Decode an uplink message from a buffer
+    // (array) of bytes to an object of fields.
     var decoded = {};
-        switch (port) {
-            case 2:
-            var lat = (b[0] | b[1]<<8 | b[2]<<16 | (b[2] & 0x80 ? 0xFF<<24 : 0)) / 10000.0;
-            var lon = (b[3] | b[4]<<8 | b[5]<<16 | (b[5] & 0x80 ? 0xFF<<24 : 0)) / 10000.0;
-            var alt = (b[6] | b[7]<<8 | (b[7] & 0x80 ? 0xFFFF<<16 : 0)) / 100.0;
-            var hdop = b[8] / 10.0;
 
-            decoded = {
-                "location": {
-                    "latitude": lat,
-                    "longitude": lon,
-                    "altitude": alt,
-                    "hdop": hdop
-                },
-            };
-            break;
+    switch(port) {
+    case 2:
+        decoded.lat = ((bytes[0]<<16)>>>0) + ((bytes[1]<<8)>>>0) + bytes[2];
+        decoded.lat = (decoded.lat / 16777215.0 * 180) - 90;
+        decoded.lon = ((bytes[3]<<16)>>>0) + ((bytes[4]<<8)>>>0) + bytes[5];
+        decoded.lon = (decoded.lon / 16777215.0 * 360) - 180;
+        var altValue = ((bytes[6]<<8)>>>0) + bytes[7];
+        var sign = bytes[6] & (1 << 7);
+        if(sign) {
+            decoded.alt = 0xFFFF0000 | altValue;
+        } else {
+            decoded.alt = altValue;
+        }
+        decoded.hdop = bytes[8] / 10.0;
+        break;
 
-            case 3:
-            var bat = (b[0] | b[1]<<8 | (b[1] & 0x80 ? 0xFFFF<<16 : 0)) * 10.0;
+    case 3:
+        var bat = (bytes[0] | bytes[1]<<8 | (bytes[1] & 0x80 ? 0xFFFF<<16 : 0)) * 10.0;
 
-            decoded ={
-                "battery":{
-                    "bat":bat
-                }
-            };
-            break;
+        decoded ={
+            "battery":{
+                "bat":bat
+            }
+        };
+        break;
 
-            case 4:
-            var aX = (b[0] | b[1]<<8 | (b[1] & 0x80 ? 0xFFFF<<16 : 0)) / 10.0;
-            var aY = (b[2] | b[3]<<8 | (b[3] & 0x80 ? 0xFFFF<<16 : 0)) / 10.0;
-            var aZ = (b[4] | b[5]<<8 | (b[5] & 0x80 ? 0xFFFF<<16 : 0)) / 10.0;
+    case 4:
+        var aX = (bytes[0] | bytes[1]<<8 | (bytes[1] & 0x80 ? 0xFFFF<<16 : 0)) / 10.0;
+        var aY = (bytes[2] | bytes[3]<<8 | (bytes[3] & 0x80 ? 0xFFFF<<16 : 0)) / 10.0;
+        var aZ = (bytes[4] | bytes[5]<<8 | (bytes[5] & 0x80 ? 0xFFFF<<16 : 0)) / 10.0;
 
-            decoded ={
-                "acceleration":{
-                    "aX":aX,
-                    "aY":aY,
-                    "aZ":aZ,
-                }
-            };
-            break;
+        decoded ={
+            "acceleration":{
+                "aX":aX,
+                "aY":aY,
+                "aZ":aZ,
+            }
+        };
+        break;
     }
     return decoded;
 }
